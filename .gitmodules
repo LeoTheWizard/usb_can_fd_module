@@ -1,0 +1,3 @@
+[submodule "external/lw_mcp251xfd"]
+	path = external/lw_mcp251xfd
+	url = https://github.com/LeoTheWizard/mcp251xfd_driver.git

@@ -9,8 +9,12 @@
  */
 
 #include <stdlib.h>
+#include "core0.h"
 
 int main(void)
 {
+
+    core0_main();
+
     return EXIT_SUCCESS;
 }
