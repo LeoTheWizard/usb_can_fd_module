@@ -28,6 +28,14 @@
 
 static MCP251XFD *can_controller = NULL;
 
+// TX Queue.
+static can_message_t can_tx_buffer_memory[32];
+can_queue_t can_tx_queue = CAN_QUEUE_STATIC_INIT(can_tx_buffer_memory, 32);
+
+// RX Queue.
+static can_message_t can_rx_buffer_memory[32];
+can_queue_t can_rx_queue = CAN_QUEUE_STATIC_INIT(can_rx_buffer_memory, 32);
+
 #pragma region SPI Bus
 static void initialise_spi(void)
 {
@@ -50,6 +58,11 @@ static void spi_chip_select(void *ctx, bool selected)
     gpio_put(SPI_CS_PIN, !selected);
 }
 
+static void delay_us(uint32_t us)
+{
+    sleep_us(us);
+}
+
 #pragma endregion SPI Bus
 
 static void initialise_can_controller(void)
@@ -66,7 +79,7 @@ static void initialise_can_controller(void)
     // Set  configuration parameters for the MCP2518FD CAN controller.
     mcp251xfd_config_t can_config = {
         .elapsed_us = time_us_32,
-        .delay_func = sleep_us,
+        .delay_func = delay_us,
         .chip_enable = spi_chip_select,
         .spi_transfer = spi_transfer,
         .iface = SPI_PORT,                // No additional context needed for SPI functions.

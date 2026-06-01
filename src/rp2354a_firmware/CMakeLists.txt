@@ -1,6 +1,7 @@
 add_executable(usb_can_fd_firmware
     main.c
     core0.c
+    can_queue.c
 )
 
 target_link_libraries(usb_can_fd_firmware

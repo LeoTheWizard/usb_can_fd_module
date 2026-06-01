@@ -11,14 +11,10 @@
 #ifndef _CORE0_H_
 #define _CORE0_H_
 
-typedef struct can_queue
-{
-    void *frames;
-    size_t frame_size;
-    size_t head;
-    size_t tail;
-    size_t capacity;
-} can_queue_t;
+#include "can_queue.h"
+
+extern can_queue_t can_tx_queue;
+extern can_queue_t can_rx_queue;
 
 void core0_main(void);
 
