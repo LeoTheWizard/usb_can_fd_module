@@ -11,11 +11,6 @@
 #ifndef _CORE0_H_
 #define _CORE0_H_
 
-#include "can_queue.h"
-
-extern can_queue_t can_tx_queue;
-extern can_queue_t can_rx_queue;
-
 void core0_main(void);
 
 #endif /* _CORE0_H_ */

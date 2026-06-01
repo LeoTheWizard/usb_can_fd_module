@@ -19,12 +19,8 @@
 #include <hardware/spi.h>
 #include <hardware/gpio.h>
 
-#define SPI_PORT spi1
-#define SPI_BAUDRATE 15000000
-#define SPI_SCK_PIN 14
-#define SPI_MOSI_PIN 15
-#define SPI_MISO_PIN 12
-#define SPI_CS_PIN 13
+#include "main.h"
+#include "hardware_defs.h"
 
 static MCP251XFD *can_controller = NULL;
 
@@ -39,23 +35,23 @@ can_queue_t can_rx_queue = CAN_QUEUE_STATIC_INIT(can_rx_buffer_memory, 32);
 #pragma region SPI Bus
 static void initialise_spi(void)
 {
-    spi_init(SPI_PORT, SPI_BAUDRATE);
-    gpio_set_function(SPI_SCK_PIN, GPIO_FUNC_SPI);  // SCK
-    gpio_set_function(SPI_MOSI_PIN, GPIO_FUNC_SPI); // MOSI
-    gpio_set_function(SPI_MISO_PIN, GPIO_FUNC_SPI); // MISO
-    gpio_set_function(SPI_CS_PIN, GPIO_FUNC_SIO);   // CS
-    gpio_set_dir(SPI_CS_PIN, GPIO_OUT);
-    gpio_put(SPI_CS_PIN, 1); // Set CS high (inactive)
+    spi_init(CAN_SPI_PORT, CAN_SPI_BAUDRATE);
+    gpio_set_function(GPIO_CAN_SCK, GPIO_FUNC_SPI);  // SCK
+    gpio_set_function(GPIO_CAN_MOSI, GPIO_FUNC_SPI); // MOSI
+    gpio_set_function(GPIO_CAN_MISO, GPIO_FUNC_SPI); // MISO
+    gpio_set_function(GPIO_CAN_CS, GPIO_FUNC_SIO);   // CS
+    gpio_set_dir(GPIO_CAN_CS, GPIO_OUT);
+    gpio_put(GPIO_CAN_CS, 1); // Set CS high (inactive)
 }
 
 static void spi_transfer(void *ctx, const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
 {
-    spi_write_read_blocking(SPI_PORT, tx_buf, rx_buf, len);
+    spi_write_read_blocking(CAN_SPI_PORT, tx_buf, rx_buf, len);
 }
 
 static void spi_chip_select(void *ctx, bool selected)
 {
-    gpio_put(SPI_CS_PIN, !selected);
+    gpio_put(GPIO_CAN_CS, !selected);
 }
 
 static void delay_us(uint32_t us)
@@ -82,7 +78,7 @@ static void initialise_can_controller(void)
         .delay_func = delay_us,
         .chip_enable = spi_chip_select,
         .spi_transfer = spi_transfer,
-        .iface = SPI_PORT,                // No additional context needed for SPI functions.
+        .iface = CAN_SPI_PORT,            // No additional context needed for SPI functions.
         .fosc = MCP251XFD_FOSC_40MHZ,     // Set based on your hardware design.
         .nominal_baud = CAN_BAUD_500KBPS, // Set desired nominal baud rate.
         .data_baud = CAN_BAUD_500KBPS,    // Set desired data baud rate for CAN FD.
