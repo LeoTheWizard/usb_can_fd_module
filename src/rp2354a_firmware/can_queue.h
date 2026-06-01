@@ -14,15 +14,32 @@
 #include <stdatomic.h>
 
 #include <lw_mcp251xfd/can.h>
+#include <usb_can_protocol.h>
+
+/**
+ * @brief Message type tag for can_message_t. Determines which union member is valid.
+ */
+typedef enum can_msg_type
+{
+    CAN_MSG_FRAME = 0, // Normal CAN data frame — frame member is valid.
+    CAN_MSG_ERROR = 1, // Bus error event — error member is valid.
+} can_msg_type_t;
+
+// usb_can_error_t (from usb_can_protocol.h) is the error payload type used in the union below.
 
 /**
  * @struct can_message
- * @brief CAN message structure with timestamp for ordering and latency measurement.
+ * @brief Tagged union carrying either a CAN data frame or a bus error event.
+ * The type field determines which union member is valid.
  */
 typedef struct can_message
 {
-    size_t timestamp; // Timestamp in microseconds, for ordering and latency measurement.
-    can_frame_t frame;
+    size_t  timestamp; // Microsecond timestamp from the MCP251xFD hardware counter.
+    uint8_t type;      // Use can_msg_type_t values.
+    union {
+        can_frame_t     frame; // Valid when type == CAN_MSG_FRAME.
+        usb_can_error_t error; // Valid when type == CAN_MSG_ERROR.
+    };
 } can_message_t;
 
 /**

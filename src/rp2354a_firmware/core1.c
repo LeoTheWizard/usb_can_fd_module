@@ -7,10 +7,18 @@
  * @copyright (c) Leo Walker 2025 @ MIT License @cite MIT License
  */
 
-#include <pico/stdlib.h>
-
 #include "core1.h"
+#include "usb_can.h"
+#include "main.h"
+
+#include <pico/stdlib.h>
 
 void core1_main(void)
 {
+    usb_can_init();
+
+    while (true)
+    {
+        usb_can_task(&can_rx_queue, &can_tx_queue);
+    }
 }

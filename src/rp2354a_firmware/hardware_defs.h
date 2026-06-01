@@ -24,7 +24,10 @@ enum gpio_pins
     GPIO_CAN_CS = 13,
 
     // LED pins.
-    GPIO_LED_1 = 25,
+    GPIO_LED_ACTIVITY = 19,
+    GPIO_LED_GREEN = 9,
+    GPIO_LED_YELLOW = 10,
+    GPIO_LED_RED = 11
 };
 
 #endif /* _HARDWARE_DEFS_H_ */
