@@ -5,6 +5,7 @@ add_executable(usb_can_fd_firmware
     can_queue.c
     usb_can.c
     usb_descriptors.c
+    ${CMAKE_SOURCE_DIR}/common/crc32.c
 )
 
 target_include_directories(usb_can_fd_firmware PRIVATE

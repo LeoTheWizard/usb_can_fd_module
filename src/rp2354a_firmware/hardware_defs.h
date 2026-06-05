@@ -22,6 +22,8 @@ enum gpio_pins
     GPIO_CAN_MOSI = 15,
     GPIO_CAN_MISO = 12,
     GPIO_CAN_CS = 13,
+    GPIO_CAN_INT = 2,
+    GPIO_CAN_120R_ENABLE = 4,
 
     // LED pins.
     GPIO_LED_ACTIVITY = 19,

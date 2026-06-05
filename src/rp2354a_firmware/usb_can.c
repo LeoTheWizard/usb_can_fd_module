@@ -9,9 +9,11 @@
  */
 
 #include "usb_can.h"
+#include "ipc.h"
 
 #include <string.h>
 #include <tusb.h>
+#include <pico/multicore.h>
 
 void usb_can_init(void)
 {
@@ -41,6 +43,7 @@ void usb_can_task(can_queue_t *rx_queue, can_queue_t *tx_queue)
         else if (msg.type == CAN_MSG_ERROR)
             pkt.payload.error = msg.error;
 
+        usb_can_packet_set_crc(&pkt);
         tud_vendor_write(&pkt, sizeof(pkt));
     }
     tud_vendor_write_flush();
@@ -51,6 +54,9 @@ void usb_can_task(can_queue_t *rx_queue, can_queue_t *tx_queue)
         usb_can_packet_t pkt;
         if (tud_vendor_read(&pkt, sizeof(pkt)) != sizeof(pkt))
             break;
+
+        if (!usb_can_packet_check_crc(&pkt))
+            continue;
 
         can_message_t out = {
             .timestamp = pkt.timestamp_us,
@@ -77,7 +83,7 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
     case USB_CAN_REQ_OPEN:
         if (stage == CONTROL_STAGE_SETUP)
         {
-            // TODO: signal core 0 via inter-core FIFO to call mcp251xfd_change_opmode(NORMAL)
+            multicore_fifo_push_blocking(IPC_CMD_OPEN);
             return tud_control_status(rhport, request);
         }
         break;
@@ -85,7 +91,7 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
     case USB_CAN_REQ_CLOSE:
         if (stage == CONTROL_STAGE_SETUP)
         {
-            // TODO: signal core 0 via inter-core FIFO to call mcp251xfd_change_opmode(SLEEP)
+            multicore_fifo_push_blocking(IPC_CMD_CLOSE);
             return tud_control_status(rhport, request);
         }
         break;
@@ -96,17 +102,26 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
                                     sizeof(pending_bittiming));
         if (stage == CONTROL_STAGE_ACK)
         {
-            // TODO: signal core 0 via inter-core FIFO to call
-            //       mcp251xfd_set_baudrates(nominal_baud, data_baud)
-            (void)pending_bittiming;
+            multicore_fifo_push_blocking(IPC_CMD_SET_BITTIMING);
+            multicore_fifo_push_blocking(pending_bittiming.nominal_baud);
+            multicore_fifo_push_blocking(pending_bittiming.data_baud);
         }
         break;
 
     case USB_CAN_REQ_SET_MODE:
         if (stage == CONTROL_STAGE_SETUP)
         {
-            // wValue carries the mcp251xfd_opmode_t to switch to
-            // TODO: signal core 0 via inter-core FIFO to call mcp251xfd_change_opmode(wValue)
+            multicore_fifo_push_blocking(IPC_CMD_SET_MODE);
+            multicore_fifo_push_blocking((uint32_t)request->wValue);
+            return tud_control_status(rhport, request);
+        }
+        break;
+
+    case USB_CAN_REQ_SET_TERMINATION:
+        if (stage == CONTROL_STAGE_SETUP)
+        {
+            multicore_fifo_push_blocking(IPC_CMD_SET_TERMINATION);
+            multicore_fifo_push_blocking((uint32_t)request->wValue);
             return tud_control_status(rhport, request);
         }
         break;
@@ -116,4 +131,17 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
     }
 
     return true;
+}
+
+// ---- TinyUSB suspend/resume callbacks --------------------------------------
+
+void tud_suspend_cb(bool remote_wakeup_en)
+{
+    (void)remote_wakeup_en;
+    multicore_fifo_push_blocking(IPC_CMD_CLOSE);
+}
+
+void tud_resume_cb(void)
+{
+    // Host will send USB_CAN_REQ_OPEN when it is ready to use the bus.
 }

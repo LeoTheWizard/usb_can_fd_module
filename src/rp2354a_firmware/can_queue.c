@@ -30,6 +30,17 @@ int can_queue_push(can_queue_t *queue, const can_message_t *message)
     return 0;
 }
 
+int can_queue_peek(const can_queue_t *queue, can_message_t *message)
+{
+    size_t head = atomic_load_explicit(&queue->head, memory_order_relaxed);
+
+    if (head == atomic_load_explicit(&queue->tail, memory_order_acquire))
+        return -1;
+
+    *message = queue->messages[head];
+    return 0;
+}
+
 int can_queue_pop(can_queue_t *queue, can_message_t *message)
 {
     size_t head = atomic_load_explicit(&queue->head, memory_order_relaxed);

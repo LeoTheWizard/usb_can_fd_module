@@ -7,31 +7,31 @@ Roughly in dependency order. Items within a section can be worked in parallel.
 ## RP2350 Firmware
 
 ### Project Setup
-- [ ] Configure `CMakeLists.txt` with Pico SDK and target (`rp2350`)
-- [ ] Add `pico_enable_stdio_usb` / USB descriptor boilerplate
-- [ ] Set up SPI peripheral for MCP251xFD (pins, clock speed, CS)
+- [x] Configure `CMakeLists.txt` with Pico SDK and target (`rp2350`)
+- [x] Add `pico_enable_stdio_usb` / USB descriptor boilerplate
+- [x] Set up SPI peripheral for MCP251xFD (pins, clock speed, CS)
 
 ### MCP251xFD Driver
-- [ ] Implement SPI read/write register helpers
-- [ ] MCP251xFD initialization sequence (oscillator, PLL, CRC)
-- [ ] Configure nominal and data bitrate (CAN FD)
-- [ ] Configure TX/RX FIFOs and message filters
-- [ ] Interrupt pin wiring and ISR on RP2350
-- [ ] TX frame submission (standard + extended IDs, FD payload up to 64 bytes)
-- [ ] RX frame reception and timestamping
+- [x] Implement SPI read/write register helpers
+- [x] MCP251xFD initialization sequence (oscillator, PLL, CRC)
+- [x] Configure nominal and data bitrate (CAN FD)
+- [x] Configure TX/RX FIFOs and message filters
+- [x] Interrupt pin wiring and ISR on RP2350
+- [x] TX frame submission (standard + extended IDs, FD payload up to 64 bytes)
+- [x] RX frame reception and timestamping
 - [ ] Bus-off detection and auto-recovery
 - [ ] Error frame reporting (RX error counter, TX error counter)
 
 ### USB Interface
-- [ ] Decide on USB transfer type: CDC ACM (simple) vs. custom bulk (higher throughput)
-- [ ] Define wire protocol / frame format for CAN↔USB encapsulation
-- [ ] Implement USB TX path (CAN frame → USB packet)
-- [ ] Implement USB RX path (USB packet → CAN frame enqueue)
+- [x] Decide on USB transfer type: CDC ACM (simple) vs. custom bulk (higher throughput)
+- [x] Define wire protocol / frame format for CAN↔USB encapsulation
+- [x] Implement USB TX path (CAN frame → USB packet)
+- [x] Implement USB RX path (USB packet → CAN frame enqueue)
 - [ ] Handle USB suspend/resume (bring bus down gracefully)
-- [ ] USB descriptor strings (VID/PID, manufacturer, product, serial)
+- [x] USB descriptor strings (VID/PID, manufacturer, product, serial)
 
 ### Testing
-- [ ] Loop-back test on bench (TX → RX on same node)
+- [x] Loop-back test on bench (TX → RX on same node)
 - [ ] Two-node test with a known-good adapter (e.g. PEAK, Kvaser)
 - [ ] Stress test at max FD data bitrate (8 Mbit/s)
 

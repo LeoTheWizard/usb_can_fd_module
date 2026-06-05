@@ -22,7 +22,9 @@
 #define _USB_CAN_PROTOCOL_H_
 
 #include <stdint.h>
+#include <stddef.h>
 #include <lw_mcp251xfd/can.h>
+#include "crc32.h"
 
 // ---- Device identification -------------------------------------------------
 
@@ -36,10 +38,11 @@
  * @brief Vendor-specific bRequest codes.
  * bmRequestType = 0x40 (vendor, host-to-device, device recipient) for all.
  */
-#define USB_CAN_REQ_OPEN          0x01 /**< Open the CAN bus. No data payload. */
-#define USB_CAN_REQ_CLOSE         0x02 /**< Close the CAN bus. No data payload. */
-#define USB_CAN_REQ_SET_BITTIMING 0x03 /**< Set bitrates. Data = usb_can_bittiming_t. */
-#define USB_CAN_REQ_SET_MODE      0x04 /**< Set operating mode. wValue = mcp251xfd_opmode_t. */
+#define USB_CAN_REQ_OPEN             0x01 /**< Open the CAN bus. No data payload. */
+#define USB_CAN_REQ_CLOSE            0x02 /**< Close the CAN bus. No data payload. */
+#define USB_CAN_REQ_SET_BITTIMING    0x03 /**< Set bitrates. Data = usb_can_bittiming_t. */
+#define USB_CAN_REQ_SET_MODE         0x04 /**< Set operating mode. wValue = mcp251xfd_opmode_t. */
+#define USB_CAN_REQ_SET_TERMINATION  0x05 /**< Enable/disable 120Ω termination. wValue = 1 (on) or 0 (off). */
 
 /**
  * @brief Payload for USB_CAN_REQ_SET_BITTIMING (8 bytes, host-to-device).
@@ -104,7 +107,11 @@ typedef struct __attribute__((packed)) usb_can_error
  * EP1 OUT (host → device): type must be USB_CAN_MSG_FRAME. timestamp_us is ignored.
  * EP1 IN  (device → host): type determines which payload member to read.
  *
- * Total size: 8 + sizeof(payload union) bytes.
+ * The crc field is a CRC-32 (IEEE 802.3) checksum of all preceding bytes in the
+ * packet (i.e. offsetof(usb_can_packet_t, crc) bytes starting at timestamp_us).
+ * Receivers must discard packets where the computed CRC does not match crc.
+ *
+ * Total size: 8 + sizeof(payload union) + 4 bytes.
  */
 typedef struct __attribute__((packed)) usb_can_packet
 {
@@ -115,6 +122,20 @@ typedef struct __attribute__((packed)) usb_can_packet
         can_frame_t     frame; /**< Valid when type == USB_CAN_MSG_FRAME. */
         usb_can_error_t error; /**< Valid when type == USB_CAN_MSG_ERROR. */
     } payload;
+    uint32_t crc; /**< CRC-32 of all bytes before this field. */
 } usb_can_packet_t;
+
+/** Computes the CRC for a packet about to be sent. Fills pkt->crc in-place. */
+static inline void usb_can_packet_set_crc(usb_can_packet_t *pkt)
+{
+    pkt->crc = crc32_compute((const uint8_t *)pkt, offsetof(usb_can_packet_t, crc));
+}
+
+/** Returns 1 if the packet CRC is valid, 0 if it is corrupt. */
+static inline int usb_can_packet_check_crc(const usb_can_packet_t *pkt)
+{
+    uint32_t computed = crc32_compute((const uint8_t *)pkt, offsetof(usb_can_packet_t, crc));
+    return computed == pkt->crc;
+}
 
 #endif /* _USB_CAN_PROTOCOL_H_ */

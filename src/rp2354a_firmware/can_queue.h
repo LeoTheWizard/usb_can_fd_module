@@ -76,6 +76,17 @@ typedef struct can_queue
 void can_queue_init(can_queue_t *queue, can_message_t *buffer, size_t capacity);
 
 /**
+ * @brief Reads the head message without removing it from the queue.
+ * Called by the consumer (core 0) only. Use before can_queue_pop to avoid
+ * losing a frame if the downstream resource (e.g. TX FIFO) is full.
+ *
+ * @param queue   Pointer to the can_queue_t.
+ * @param message Pointer to a can_message_t to copy the result into.
+ * @return 0 on success, -1 if the queue is empty.
+ */
+int can_queue_peek(const can_queue_t *queue, can_message_t *message);
+
+/**
  * @brief Pushes a message onto the tail of the queue.
  * Called by the producer (core 1) only.
  *
