@@ -31,7 +31,11 @@
 
 // ---- Queue storage ---------------------------------------------------------
 
-#define CAN_QUEUE_CAPACITY 64
+#define CAN_QUEUE_CAPACITY 1024
+
+// can_queue masks indices with (capacity - 1), so capacity must be a power of two.
+_Static_assert((CAN_QUEUE_CAPACITY & (CAN_QUEUE_CAPACITY - 1)) == 0,
+               "CAN_QUEUE_CAPACITY must be a power of two");
 
 static can_message_t can_tx_buffer[CAN_QUEUE_CAPACITY];
 can_queue_t can_tx_queue = CAN_QUEUE_STATIC_INIT(can_tx_buffer, CAN_QUEUE_CAPACITY);
@@ -41,8 +45,16 @@ can_queue_t can_rx_queue = CAN_QUEUE_STATIC_INIT(can_rx_buffer, CAN_QUEUE_CAPACI
 
 // ---- MCP251xFD FIFO assignments --------------------------------------------
 
-#define CAN_TX_FIFO  1
-#define CAN_RX_FIFO  2
+#define CAN_TX_FIFO 1
+#define CAN_RX_FIFO 2
+
+// Message RAM is 2 KB. With 64-byte payloads each object costs 8 + 64 = 72 bytes,
+// so TX(8) + RX(20) = 28 objects = 2016 bytes, which fits the budget. Passing these
+// to mcp251xfd_initialise keeps the unused TX Queue disabled and runs its RAM check.
+static mcp251xfd_fifo_config_t can_fifo_configs[] = {
+    [CAN_TX_FIFO - 1] = {.tx = true, .depth = 8, .payload = MCP251XFD_PLSIZE_64},
+    [CAN_RX_FIFO - 1] = {.tx = false, .depth = 20, .payload = MCP251XFD_PLSIZE_64},
+};
 
 // ---- Module state ----------------------------------------------------------
 
@@ -72,10 +84,10 @@ static void delay_us_cb(uint32_t us)
 static void initialise_spi(void)
 {
     spi_init(CAN_SPI_PORT, CAN_SPI_BAUDRATE);
-    gpio_set_function(GPIO_CAN_SCK,  GPIO_FUNC_SPI);
+    gpio_set_function(GPIO_CAN_SCK, GPIO_FUNC_SPI);
     gpio_set_function(GPIO_CAN_MOSI, GPIO_FUNC_SPI);
     gpio_set_function(GPIO_CAN_MISO, GPIO_FUNC_SPI);
-    gpio_set_function(GPIO_CAN_CS,   GPIO_FUNC_SIO);
+    gpio_set_function(GPIO_CAN_CS, GPIO_FUNC_SIO);
     gpio_set_dir(GPIO_CAN_CS, GPIO_OUT);
     gpio_put(GPIO_CAN_CS, 1);
 }
@@ -87,9 +99,9 @@ static void initialise_leds(void)
     gpio_init(GPIO_LED_YELLOW);
     gpio_init(GPIO_LED_RED);
     gpio_set_dir(GPIO_LED_ACTIVITY, GPIO_OUT);
-    gpio_set_dir(GPIO_LED_GREEN,    GPIO_OUT);
-    gpio_set_dir(GPIO_LED_YELLOW,   GPIO_OUT);
-    gpio_set_dir(GPIO_LED_RED,      GPIO_OUT);
+    gpio_set_dir(GPIO_LED_GREEN, GPIO_OUT);
+    gpio_set_dir(GPIO_LED_YELLOW, GPIO_OUT);
+    gpio_set_dir(GPIO_LED_RED, GPIO_OUT);
 }
 
 static void initialise_can_int_gpio(void)
@@ -97,27 +109,6 @@ static void initialise_can_int_gpio(void)
     gpio_init(GPIO_CAN_INT);
     gpio_set_dir(GPIO_CAN_INT, GPIO_IN);
     gpio_pull_up(GPIO_CAN_INT);
-}
-
-static void configure_can_fifos(void)
-{
-    mcp251xfd_fifo_config_t tx_cfg = {
-        .tx         = true,
-        .depth      = 8,
-        .payload    = MCP251XFD_PLSIZE_64,
-        .tx_priority = 0,
-        .auto_rtr   = false,
-    };
-    mcp251xfd_configure_fifo(can_controller, CAN_TX_FIFO, &tx_cfg, NULL);
-
-    mcp251xfd_fifo_config_t rx_cfg = {
-        .tx         = false,
-        .depth      = 32,
-        .payload    = MCP251XFD_PLSIZE_64,
-        .tx_priority = 0,
-        .auto_rtr   = false,
-    };
-    mcp251xfd_configure_fifo(can_controller, CAN_RX_FIFO, &rx_cfg, NULL);
 }
 
 static void configure_can_filters(void)
@@ -129,10 +120,10 @@ static void configure_can_filters(void)
 static void configure_can_interrupts(void)
 {
     mcp251xfd_configure_interrupts(can_controller,
-        MCP251XFD_INT_RX        |
-        MCP251XFD_INT_CAN_ERROR |
-        MCP251XFD_INT_RX_OVFLOW |
-        MCP251XFD_INT_INVALID);
+                                   MCP251XFD_INT_RX |
+                                       MCP251XFD_INT_CAN_ERROR |
+                                       MCP251XFD_INT_RX_OVFLOW |
+                                       MCP251XFD_INT_INVALID);
 }
 
 static void initialise_can_controller(void)
@@ -146,23 +137,22 @@ static void initialise_can_controller(void)
     can_controller = mcp251xfd_create_instance();
 
     mcp251xfd_config_t cfg = {
-        .elapsed_us   = time_us_32,
-        .delay_func   = delay_us_cb,
-        .chip_enable  = spi_chip_select_cb,
+        .elapsed_us = time_us_32,
+        .delay_func = delay_us_cb,
+        .chip_enable = spi_chip_select_cb,
         .spi_transfer = spi_transfer_cb,
-        .iface        = CAN_SPI_PORT,
-        .fosc         = MCP251XFD_FOSC_40MHZ,
+        .iface = CAN_SPI_PORT,
+        .fosc = MCP251XFD_FOSC_40MHZ,
         .nominal_baud = CAN_BAUD_500KBPS,
-        .data_baud    = CAN_BAUD_500KBPS,
-        .enable_ecc   = false,
-        .model        = MODEL_MCP2518FD,
-        .fifo_configs = NULL,
-        .fifo_count   = 0,
+        .data_baud = CAN_BAUD_500KBPS,
+        .enable_ecc = false,
+        .model = MODEL_MCP2518FD,
+        .fifo_configs = can_fifo_configs,
+        .fifo_count = sizeof(can_fifo_configs) / sizeof(can_fifo_configs[0]),
     };
     mcp251xfd_initialise(can_controller, &cfg);
 
-    // Device is now in config mode; set up FIFOs, filters, interrupts.
-    configure_can_fifos();
+    // FIFOs are set up by mcp251xfd_initialise from cfg; configure filters and interrupts.
     configure_can_filters();
     configure_can_interrupts();
 
@@ -184,7 +174,7 @@ static void service_can_rx(void)
     while (pending > 0)
     {
         can_message_t msg = {0};
-        msg.type      = CAN_MSG_FRAME;
+        msg.type = CAN_MSG_FRAME;
         msg.timestamp = time_us_32();
 
         if (mcp251xfd_get_received(can_controller, CAN_RX_FIFO, &msg.frame) != MCP251XFD_RETURN_OK)
@@ -199,18 +189,18 @@ static void service_can_rx(void)
 static void service_can_error(uint32_t int_flags)
 {
     can_message_t msg = {0};
-    msg.type      = CAN_MSG_ERROR;
+    msg.type = CAN_MSG_ERROR;
     msg.timestamp = time_us_32();
 
     mcp251xfd_error_state_t state = {0};
     if (mcp251xfd_get_error_state(can_controller, &state) == MCP251XFD_RETURN_OK)
     {
-        msg.error.rec        = state.rec;
-        msg.error.tec        = state.tec;
+        msg.error.rec = state.rec;
+        msg.error.tec = state.tec;
         msg.error.error_warn = state.error_warn;
         msg.error.rx_passive = state.rx_passive;
         msg.error.tx_passive = state.tx_passive;
-        msg.error.bus_off    = state.bus_off;
+        msg.error.bus_off = state.bus_off;
     }
 
     mcp251xfd_diagnostics_t diag = {0};
@@ -218,22 +208,22 @@ static void service_can_error(uint32_t int_flags)
     {
         msg.error.nominal_rx_errors = diag.nominal_rx_errors;
         msg.error.nominal_tx_errors = diag.nominal_tx_errors;
-        msg.error.data_rx_errors    = diag.data_rx_errors;
-        msg.error.data_tx_errors    = diag.data_tx_errors;
+        msg.error.data_rx_errors = diag.data_rx_errors;
+        msg.error.data_tx_errors = diag.data_tx_errors;
         msg.error.error_frame_count = diag.error_frame_count;
-        msg.error.nbit0_err         = diag.nbit0_err;
-        msg.error.nbit1_err         = diag.nbit1_err;
-        msg.error.nack_err          = diag.nack_err;
-        msg.error.nform_err         = diag.nform_err;
-        msg.error.nstuff_err        = diag.nstuff_err;
-        msg.error.ncrc_err          = diag.ncrc_err;
-        msg.error.dbit0_err         = diag.dbit0_err;
-        msg.error.dbit1_err         = diag.dbit1_err;
-        msg.error.dform_err         = diag.dform_err;
-        msg.error.dstuff_err        = diag.dstuff_err;
-        msg.error.dcrc_err          = diag.dcrc_err;
-        msg.error.txbo_err          = diag.txbo_err;
-        msg.error.dlc_mismatch      = diag.dlc_mismatch;
+        msg.error.nbit0_err = diag.nbit0_err;
+        msg.error.nbit1_err = diag.nbit1_err;
+        msg.error.nack_err = diag.nack_err;
+        msg.error.nform_err = diag.nform_err;
+        msg.error.nstuff_err = diag.nstuff_err;
+        msg.error.ncrc_err = diag.ncrc_err;
+        msg.error.dbit0_err = diag.dbit0_err;
+        msg.error.dbit1_err = diag.dbit1_err;
+        msg.error.dform_err = diag.dform_err;
+        msg.error.dstuff_err = diag.dstuff_err;
+        msg.error.dcrc_err = diag.dcrc_err;
+        msg.error.txbo_err = diag.txbo_err;
+        msg.error.dlc_mismatch = diag.dlc_mismatch;
     }
 
     if (int_flags & MCP251XFD_INT_RX_OVFLOW)
@@ -313,7 +303,7 @@ static void service_ipc(void)
     case IPC_CMD_SET_BITTIMING:
     {
         uint32_t nominal = multicore_fifo_pop_blocking();
-        uint32_t data    = multicore_fifo_pop_blocking();
+        uint32_t data = multicore_fifo_pop_blocking();
         // Bitrate changes require config mode.
         mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_CONFIG, 100000);
         mcp251xfd_set_baudrates(can_controller, nominal, data);

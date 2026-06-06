@@ -19,7 +19,7 @@ void can_queue_init(can_queue_t *queue, can_message_t *buffer, size_t capacity)
 int can_queue_push(can_queue_t *queue, const can_message_t *message)
 {
     size_t tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    size_t next_tail = (tail + 1) % queue->capacity;
+    size_t next_tail = (tail + 1) & (queue->capacity - 1);
 
     if (next_tail == atomic_load_explicit(&queue->head, memory_order_acquire))
         return -1;
@@ -50,7 +50,7 @@ int can_queue_pop(can_queue_t *queue, can_message_t *message)
 
     *message = queue->messages[head];
 
-    atomic_store_explicit(&queue->head, (head + 1) % queue->capacity, memory_order_release);
+    atomic_store_explicit(&queue->head, (head + 1) & (queue->capacity - 1), memory_order_release);
     return 0;
 }
 
@@ -58,7 +58,7 @@ size_t can_queue_size(const can_queue_t *queue)
 {
     size_t head = atomic_load_explicit(&queue->head, memory_order_acquire);
     size_t tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
-    return (tail + queue->capacity - head) % queue->capacity;
+    return (tail - head) & (queue->capacity - 1);
 }
 
 void can_queue_clear(can_queue_t *queue)

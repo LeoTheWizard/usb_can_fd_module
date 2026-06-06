@@ -46,6 +46,11 @@ typedef struct can_message
  * @struct can_queue
  * @brief Lock-free SPSC circular buffer for CAN messages.
  * head and tail are atomic so no mutex is required on the hot path.
+ *
+ * @note capacity MUST be a power of two. The index wrap on the hot path uses a
+ *       bitwise mask (& (capacity - 1)) instead of a modulo, which is only
+ *       equivalent when capacity is a power of two. One slot is reserved to
+ *       distinguish full from empty, so usable depth is capacity - 1.
  */
 typedef struct can_queue
 {

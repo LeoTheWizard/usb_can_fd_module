@@ -1,0 +1,2 @@
+# All kernel build artifacts are confined to build/ (see Makefile).
+/build/

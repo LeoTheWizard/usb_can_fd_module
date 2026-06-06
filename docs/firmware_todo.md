@@ -1,0 +1,88 @@
+# Firmware — open items & things to think about
+
+Status snapshot: the firmware compiles and the USB ↔ CAN data path is structurally
+complete (two cores, lock-free SPSC queues, MCP251xFD driver, framed USB protocol with
+SOF + CRC). It has **not** been verified on real hardware. The items below are what's
+left to finish or decide before it's a dependable CAN module, grouped by theme.
+
+## 1. Hardware bring-up (the big unknown)
+- [ ] Nothing has run on real silicon. Verify: SPI comms with the MCP2518FD, 40 MHz
+      crystal/oscillator lock, INT pin timing, transceiver TX/RX, the 120 Ω termination relay.
+- [ ] Confirm `CAN_SPI_BAUDRATE` (15 MHz) is within the MCP2518FD spec for the chosen
+      mode and that reads/writes (incl. CRC reads) are reliable at that rate.
+- [ ] Confirm pin map in `hardware_defs.h` matches the actual PCB.
+
+## 2. Error handling / observability (currently silent failures)
+- [ ] `initialise_can_controller()` ignores **every** return code
+      (`mcp251xfd_initialise`, `change_opmode`, `set_baudrates`, FIFO config). If bring-up
+      fails, USB still enumerates and ACKs commands while CAN does nothing. Add checks +
+      surface failure (LED + an error/status packet to the host).
+- [ ] No firmware-side logging/diagnostics channel for field debugging.
+- [ ] No watchdog. A blocking SPI call or a hung core has no recovery path.
+
+## 3. Host-visible status (protocol gap)
+- [ ] No way for the host to *query* state: firmware version, current bitrate/mode,
+      bus state, error counters on demand. Today errors are only pushed asynchronously.
+      Add a control request with a data-IN stage (e.g. `GET_STATUS`, `GET_VERSION`).
+- [ ] A version/capability handshake would let the host driver detect protocol mismatches.
+
+## 4. TX path: echo, confirmation, flow control (needed for SocketCAN)
+- [ ] **No TX echo / completion.** SocketCAN expects transmitted frames to be echoed
+      back (local echo + TX done accounting). The MCP251xFD TEF (Transmit Event FIFO) is
+      supported by the library (`mcp251xfd_enable_tef`, `mcp251xfd_read_tef`) but unused.
+      Decide how TX completion is reported to the host (TEF → a TX-done packet type).
+- [ ] **TX drops are silent.** A full `can_tx_queue` drops the frame with no host signal.
+      SocketCAN wants back-pressure (stop/wake the netdev queue). Consider a flow-control
+      or credit/TX-done scheme so the host can stop submitting when the device is full.
+
+## 5. Timestamps
+- [ ] Inconsistency: `can_queue.h` documents the timestamp as the MCP251xFD hardware
+      counter, but `core0.c` actually stamps with `time_us_32()` (RP2350). Pick one.
+- [ ] `time_us_32()` wraps every ~71 min — define wrap handling, or move to a 64-bit base.
+- [ ] For hardware timestamping in SocketCAN, the MCP251xFD TBC is the better source.
+
+## 6. Bit timing / bitrate (reconcile with SocketCAN model)
+- [ ] `SET_BITTIMING` sends nominal+data **bitrates**; the firmware computes segments and
+      requires the rate to divide the 40 MHz sysclk exactly (odd rates are rejected).
+- [ ] SocketCAN idiom is the opposite: the *kernel* computes bit timing (brp/seg1/seg2/sjw)
+      from `clock.freq` + `bittiming_const`, then hands the driver register-level values.
+      **Decide:** either (a) extend the protocol to accept raw bit-timing segments and have
+      the driver pass the kernel-computed values, or (b) keep "send bitrate" and have the
+      driver override `do_set_bittiming` to just forward the bitrate. (a) is more idiomatic.
+- [ ] No way to tune sample point / SJW from the host today.
+
+## 7. Operating modes & CAN FD
+- [ ] `SET_MODE` forwards a raw `mcp251xfd_opmode_t`. Map SocketCAN ctrlmodes
+      (LISTENONLY, LOOPBACK, ONE_SHOT, PRESUME_ACK, FD) to MCP modes/registers.
+- [ ] Verify full CAN FD path end-to-end: data-phase baud, BRS/FDF/ESI flags, 64-byte DLC.
+- [ ] Filters: firmware accepts all (fine — SocketCAN filters host-side). Decide whether to
+      offer hardware filter offload later.
+
+## 8. Bus-off & error reporting
+- [ ] `recover_bus_off()` is called inline on bus-off. SocketCAN has restart-ms / manual
+      restart semantics — decide the policy and whether the host controls it.
+- [ ] The custom `usb_can_error_t` must be translatable to SocketCAN error frames
+      (`CAN_ERR_*`). Make sure all fields the kernel needs (state transitions, counters)
+      are present and clearly defined.
+
+## 9. RX flush on open (known limitation)
+- [ ] `USB_CAN_REQ_OPEN` flushes only the OUT (host→device) FIFO. Stale RX frames already
+      in `can_rx_queue` aren't dropped (clearing it from core 1 races core 0's producer).
+      If a hard IN flush is wanted, do it via IPC on core 0. Workaround for now: host
+      ignores frames with timestamps predating its open.
+
+## 10. USB
+- [ ] VID/PID `0xCAFE/0x0CDA` are placeholders — get a real allocation (or use pid.codes
+      for open-source) before distributing.
+- [ ] Full-Speed only (RP2350 USB). Practical bulk throughput (~1 MB/s) can bottleneck
+      sustained high-rate CAN FD (8 Mbit/s data). Quantify worst-case and document limits.
+- [ ] No MS OS descriptors → Windows won't auto-bind WinUSB (irrelevant for the Linux
+      kernel module, noted for any future Windows/userspace host).
+- [ ] Verify suspend/resume behavior (`tud_suspend_cb` closes the bus; resume waits for
+      host `OPEN`).
+
+## 11. Misc / housekeeping
+- [ ] Queue depth is 1024 (~160 KB SRAM across both queues). Fine, but no longer trivial —
+      revisit if other large allocations appear.
+- [ ] Confirm SPSC invariant holds on every path (RX: core0→core1; TX: core1→core0). All
+      RX pushes currently originate on core 0 only — keep it that way.

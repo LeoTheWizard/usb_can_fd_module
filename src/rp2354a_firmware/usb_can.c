@@ -33,9 +33,10 @@ void usb_can_task(can_queue_t *rx_queue, can_queue_t *tx_queue)
            can_queue_pop(rx_queue, &msg) == 0)
     {
         usb_can_packet_t pkt = {
-            .timestamp_us = (uint32_t)msg.timestamp,
+            .sof          = USB_CAN_SOF,
             .type         = (uint8_t)msg.type,
-            ._reserved    = {0, 0, 0},
+            ._reserved    = 0,
+            .timestamp_us = (uint32_t)msg.timestamp,
         };
 
         if (msg.type == CAN_MSG_FRAME)
@@ -51,11 +52,24 @@ void usb_can_task(can_queue_t *rx_queue, can_queue_t *tx_queue)
     // Host → Device: read complete USB packets and push onto the CAN TX queue.
     while (tud_vendor_available() >= sizeof(usb_can_packet_t))
     {
+        // Re-align to the start-of-frame marker: drop any leading byte that is not
+        // the low byte of USB_CAN_SOF so a desynced stream heals itself.
+        uint8_t head;
+        if (!tud_vendor_peek(&head))
+            break;
+        if (head != (uint8_t)(USB_CAN_SOF & 0xFFu))
+        {
+            uint8_t discard;
+            tud_vendor_read(&discard, 1);
+            continue;
+        }
+
         usb_can_packet_t pkt;
         if (tud_vendor_read(&pkt, sizeof(pkt)) != sizeof(pkt))
             break;
 
-        if (!usb_can_packet_check_crc(&pkt))
+        // Reject a false marker match or corruption; the next iteration re-aligns.
+        if (pkt.sof != USB_CAN_SOF || !usb_can_packet_check_crc(&pkt))
             continue;
 
         can_message_t out = {
@@ -83,6 +97,9 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
     case USB_CAN_REQ_OPEN:
         if (stage == CONTROL_STAGE_SETUP)
         {
+            // Drop any stale host→device bytes buffered before this session so the
+            // first post-open packet starts on a clean frame boundary.
+            tud_vendor_read_flush();
             multicore_fifo_push_blocking(IPC_CMD_OPEN);
             return tud_control_status(rhport, request);
         }
