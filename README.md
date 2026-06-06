@@ -1,4 +1,4 @@
-![CAN Module Banner](docs/CAN_Module_banner.webp)
+![CAN Module Banner](docs/Banner.webp)
 
 # USB CAN-FD Module
 
