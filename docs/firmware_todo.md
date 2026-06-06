@@ -19,6 +19,10 @@ left to finish or decide before it's a dependable CAN module, grouped by theme.
       surface failure (LED + an error/status packet to the host).
 - [ ] No firmware-side logging/diagnostics channel for field debugging.
 - [ ] No watchdog. A blocking SPI call or a hung core has no recovery path.
+- [x] DONE (partial): bus-error events were already reported (CAN_MSG_ERROR). Added
+      software RX-queue overflow reporting — when core0 can't enqueue a frame/event
+      because can_rx_queue is full (host too slow), it latches and sends an error with
+      usb_can_error_t.sw_overflow set once the queue drains.
 
 ## 3. Host-visible status (protocol gap)
 - [ ] No way for the host to *query* state: firmware version, current bitrate/mode,
@@ -27,13 +31,16 @@ left to finish or decide before it's a dependable CAN module, grouped by theme.
 - [ ] A version/capability handshake would let the host driver detect protocol mismatches.
 
 ## 4. TX path: echo, confirmation, flow control (needed for SocketCAN)
-- [ ] **No TX echo / completion.** SocketCAN expects transmitted frames to be echoed
-      back (local echo + TX done accounting). The MCP251xFD TEF (Transmit Event FIFO) is
-      supported by the library (`mcp251xfd_enable_tef`, `mcp251xfd_read_tef`) but unused.
-      Decide how TX completion is reported to the host (TEF → a TX-done packet type).
-- [ ] **TX drops are silent.** A full `can_tx_queue` drops the frame with no host signal.
-      SocketCAN wants back-pressure (stop/wake the netdev queue). Consider a flow-control
-      or credit/TX-done scheme so the host can stop submitting when the device is full.
+- [x] DONE: TX confirmation via TEF. core0 enables the TEF, drains it on the TEF
+      interrupt, and emits a USB_CAN_MSG_TX_EVENT per transmitted frame carrying the
+      host's echo cookie (sent in the TX frame's timestamp_us), the frame id/flags/dlc,
+      and a transmit timestamp. Cookie correlation uses an in-order software FIFO on
+      core0 (single TX FIFO + TEF are in-order); the cookie FIFO is reset on bus-off.
+      Kernel side still needs to consume TX_EVENT and call can_get_echo_skb (milestone 3).
+- [ ] **TX drops are still silent on the host→device side.** A full `can_tx_queue`
+      (filled from core1/USB) drops the frame with no host signal. SocketCAN wants
+      back-pressure (stop/wake the netdev queue). Still needs a flow-control/credit
+      scheme. (Note: device→host RX-queue drops are now reported — see item 2.)
 
 ## 5. Timestamps
 - [ ] Inconsistency: `can_queue.h` documents the timestamp as the MCP251xFD hardware
@@ -42,14 +49,13 @@ left to finish or decide before it's a dependable CAN module, grouped by theme.
 - [ ] For hardware timestamping in SocketCAN, the MCP251xFD TBC is the better source.
 
 ## 6. Bit timing / bitrate (reconcile with SocketCAN model)
-- [ ] `SET_BITTIMING` sends nominal+data **bitrates**; the firmware computes segments and
-      requires the rate to divide the 40 MHz sysclk exactly (odd rates are rejected).
-- [ ] SocketCAN idiom is the opposite: the *kernel* computes bit timing (brp/seg1/seg2/sjw)
-      from `clock.freq` + `bittiming_const`, then hands the driver register-level values.
-      **Decide:** either (a) extend the protocol to accept raw bit-timing segments and have
-      the driver pass the kernel-computed values, or (b) keep "send bitrate" and have the
-      driver override `do_set_bittiming` to just forward the bitrate. (a) is more idiomatic.
-- [ ] No way to tune sample point / SJW from the host today.
+- [x] DONE: chose option (a). The protocol now carries register-level segments
+      (brp/tseg1/tseg2/sjw) per phase via SET_BITTIMING (nominal) and
+      SET_DATA_BITTIMING (data). Firmware calls mcp251xfd_set_bit_timing(); the kernel
+      driver's do_set_bittiming/do_set_data_bittiming forward the kernel-computed segments.
+      `mcp251xfd_set_baudrates()` is retained and still used for the boot-time default.
+- [ ] Sample point / SJW are now whatever the kernel computes (good). The legacy
+      baud-based path is still used at init only — fine, but could be unified later.
 
 ## 7. Operating modes & CAN FD
 - [ ] `SET_MODE` forwards a raw `mcp251xfd_opmode_t`. Map SocketCAN ctrlmodes

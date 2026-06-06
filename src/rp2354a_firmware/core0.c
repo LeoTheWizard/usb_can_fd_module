@@ -48,13 +48,30 @@ can_queue_t can_rx_queue = CAN_QUEUE_STATIC_INIT(can_rx_buffer, CAN_QUEUE_CAPACI
 #define CAN_TX_FIFO 1
 #define CAN_RX_FIFO 2
 
-// Message RAM is 2 KB. With 64-byte payloads each object costs 8 + 64 = 72 bytes,
-// so TX(8) + RX(20) = 28 objects = 2016 bytes, which fits the budget. Passing these
-// to mcp251xfd_initialise keeps the unused TX Queue disabled and runs its RAM check.
+#define CAN_TX_FIFO_DEPTH 8
+#define CAN_TEF_DEPTH     8 // Transmit Event FIFO; >= TX FIFO depth so it never overflows.
+
+// Message RAM is 2 KB. Each 64-byte FIFO object costs 8 + 64 = 72 bytes; each TEF
+// entry (header only, no timestamp) costs 8 bytes. Budget:
+//   TX(8)x72 + RX(19)x72 + TEF(8)x8 = 576 + 1368 + 64 = 2008 bytes (<= 2048).
+// The library's pre-flight RAM check covers only the FIFOs below; the TEF is enabled
+// separately in initialise_can_controller(), so keep this total in mind when tuning.
 static mcp251xfd_fifo_config_t can_fifo_configs[] = {
-    [CAN_TX_FIFO - 1] = {.tx = true, .depth = 8, .payload = MCP251XFD_PLSIZE_64},
-    [CAN_RX_FIFO - 1] = {.tx = false, .depth = 20, .payload = MCP251XFD_PLSIZE_64},
+    [CAN_TX_FIFO - 1] = {.tx = true, .depth = CAN_TX_FIFO_DEPTH, .payload = MCP251XFD_PLSIZE_64},
+    [CAN_RX_FIFO - 1] = {.tx = false, .depth = 19, .payload = MCP251XFD_PLSIZE_64},
 };
+
+// Pending TX echo cookies, recorded when a frame is submitted and returned when its
+// TEF (transmit event) arrives. Single TX FIFO + TEF are in-order, so a plain FIFO
+// keeps cookies aligned with completions. Accessed only by core 0 (no locking).
+#define TX_COOKIE_CAPACITY 16
+static uint32_t tx_cookies[TX_COOKIE_CAPACITY];
+static size_t   tx_cookie_head = 0;
+static size_t   tx_cookie_tail = 0;
+
+// Latched when a push to can_rx_queue is dropped because the queue is full (host too
+// slow); reported to the host as an error message once the queue drains. core 0 only.
+static bool rx_overflowed = false;
 
 // ---- Module state ----------------------------------------------------------
 
@@ -121,6 +138,7 @@ static void configure_can_interrupts(void)
 {
     mcp251xfd_configure_interrupts(can_controller,
                                    MCP251XFD_INT_RX |
+                                       MCP251XFD_INT_TEF |
                                        MCP251XFD_INT_CAN_ERROR |
                                        MCP251XFD_INT_RX_OVFLOW |
                                        MCP251XFD_INT_INVALID);
@@ -156,11 +174,53 @@ static void initialise_can_controller(void)
     configure_can_filters();
     configure_can_interrupts();
 
+    // Enable the Transmit Event FIFO so transmitted frames are confirmed back to the
+    // host. Timestamps come from time_us_32() at read time (matching the RX path), so
+    // the hardware TEF timestamp is not requested. Must be done in config mode.
+    mcp251xfd_tef_config_t tef_cfg = {.depth = CAN_TEF_DEPTH, .timestamps = false};
+    mcp251xfd_enable_tef(can_controller, &tef_cfg);
+
     // Enable on-board 120Ω termination resistor.
     gpio_put(GPIO_CAN_120R_ENABLE, 1);
 
     mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_NORMAL, 100000);
     gpio_put(GPIO_LED_GREEN, 1);
+}
+
+// ---- Helpers ---------------------------------------------------------------
+
+// Push to the RX queue; if it is full, latch rx_overflowed so the drop is reported.
+static bool rx_queue_push(const can_message_t *msg)
+{
+    if (can_queue_push(&can_rx_queue, msg) != 0)
+    {
+        rx_overflowed = true;
+        return false;
+    }
+    return true;
+}
+
+static void tx_cookie_push(uint32_t cookie)
+{
+    size_t next = (tx_cookie_head + 1) % TX_COOKIE_CAPACITY;
+    if (next == tx_cookie_tail)
+        return; // Full (should not happen: capacity >= TX FIFO depth). Drop.
+    tx_cookies[tx_cookie_head] = cookie;
+    tx_cookie_head = next;
+}
+
+static uint32_t tx_cookie_pop(void)
+{
+    if (tx_cookie_tail == tx_cookie_head)
+        return 0; // Empty: no matching cookie (e.g. after a bus-off reset).
+    uint32_t cookie = tx_cookies[tx_cookie_tail];
+    tx_cookie_tail = (tx_cookie_tail + 1) % TX_COOKIE_CAPACITY;
+    return cookie;
+}
+
+static void tx_cookie_reset(void)
+{
+    tx_cookie_head = tx_cookie_tail = 0;
 }
 
 // ---- CAN interrupt service -------------------------------------------------
@@ -180,7 +240,7 @@ static void service_can_rx(void)
         if (mcp251xfd_get_received(can_controller, CAN_RX_FIFO, &msg.frame) != MCP251XFD_RETURN_OK)
             break;
 
-        can_queue_push(&can_rx_queue, &msg);
+        rx_queue_push(&msg);
         gpio_put(GPIO_LED_ACTIVITY, 1);
         pending--;
     }
@@ -233,12 +293,34 @@ static void service_can_error(uint32_t int_flags)
         msg.error.rx_overflow = overflowed;
     }
 
-    can_queue_push(&can_rx_queue, &msg);
+    rx_queue_push(&msg);
     gpio_put(GPIO_LED_RED, state.bus_off || state.tx_passive || state.rx_passive);
     gpio_put(GPIO_LED_YELLOW, state.error_warn);
 
     if (state.bus_off)
+    {
+        // Pending TX frames are discarded by the recovery; drop their cookies so they
+        // don't mis-pair with later transmit events. The host flushes its own echoes.
+        tx_cookie_reset();
         mcp251xfd_recover_bus_off(can_controller, 200000);
+    }
+}
+
+// Drain the Transmit Event FIFO, emitting a confirmation per transmitted frame.
+static void service_can_tef(void)
+{
+    mcp251xfd_tef_entry_t entry;
+    while (mcp251xfd_read_tef(can_controller, &entry) == MCP251XFD_RETURN_OK)
+    {
+        can_message_t msg = {0};
+        msg.type            = CAN_MSG_TX_EVENT;
+        msg.timestamp       = time_us_32();
+        msg.tx_event.cookie = tx_cookie_pop();
+        msg.tx_event.id     = entry.id;
+        msg.tx_event.flags  = entry.flags;
+        msg.tx_event.dlc    = entry.dlc;
+        rx_queue_push(&msg);
+    }
 }
 
 static void service_can_interrupt(void)
@@ -249,6 +331,9 @@ static void service_can_interrupt(void)
 
     if (flags & MCP251XFD_INT_RX)
         service_can_rx();
+
+    if (flags & MCP251XFD_INT_TEF)
+        service_can_tef();
 
     if (flags & (MCP251XFD_INT_CAN_ERROR | MCP251XFD_INT_RX_OVFLOW | MCP251XFD_INT_INVALID))
         service_can_error(flags);
@@ -267,6 +352,8 @@ static void service_can_tx(void)
         if (ret == MCP251XFD_RETURN_TX_FIFO_FULL)
             break; // Leave the frame in the queue; retry next iteration.
 
+        // Record the host's echo cookie so the matching TEF event can return it.
+        tx_cookie_push((uint32_t)msg.timestamp);
         can_queue_pop(&can_tx_queue, &msg);
         gpio_put(GPIO_LED_ACTIVITY, 1);
     }
@@ -302,12 +389,33 @@ static void service_ipc(void)
 
     case IPC_CMD_SET_BITTIMING:
     {
-        uint32_t nominal = multicore_fifo_pop_blocking();
-        uint32_t data = multicore_fifo_pop_blocking();
-        // Bitrate changes require config mode.
+        uint32_t w0 = multicore_fifo_pop_blocking();
+        uint32_t w1 = multicore_fifo_pop_blocking();
+        mcp251xfd_bit_timing_t nominal = {
+            .brp   = IPC_BITTIMING_UNPACK_BRP(w0),
+            .tseg1 = IPC_BITTIMING_UNPACK_TSEG1(w0),
+            .tseg2 = IPC_BITTIMING_UNPACK_TSEG2(w1),
+            .sjw   = IPC_BITTIMING_UNPACK_SJW(w1),
+        };
+        // Bit-timing registers are writable only in config mode; stay there and let
+        // IPC_CMD_OPEN return to NORMAL when the host brings the interface up.
         mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_CONFIG, 100000);
-        mcp251xfd_set_baudrates(can_controller, nominal, data);
-        mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_NORMAL, 100000);
+        mcp251xfd_set_bit_timing(can_controller, &nominal, NULL);
+        break;
+    }
+
+    case IPC_CMD_SET_DATA_BITTIMING:
+    {
+        uint32_t w0 = multicore_fifo_pop_blocking();
+        uint32_t w1 = multicore_fifo_pop_blocking();
+        mcp251xfd_bit_timing_t data = {
+            .brp   = IPC_BITTIMING_UNPACK_BRP(w0),
+            .tseg1 = IPC_BITTIMING_UNPACK_TSEG1(w0),
+            .tseg2 = IPC_BITTIMING_UNPACK_TSEG2(w1),
+            .sjw   = IPC_BITTIMING_UNPACK_SJW(w1),
+        };
+        mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_CONFIG, 100000);
+        mcp251xfd_set_bit_timing(can_controller, NULL, &data);
         break;
     }
 
@@ -321,6 +429,22 @@ static void service_ipc(void)
     default:
         break;
     }
+}
+
+// If an earlier RX-queue push was dropped, retry reporting it now that the queue may
+// have drained. Sends a minimal error message flagging the software overflow.
+static void service_sw_overflow_report(void)
+{
+    if (!rx_overflowed)
+        return;
+
+    can_message_t msg = {0};
+    msg.type = CAN_MSG_ERROR;
+    msg.timestamp = time_us_32();
+    msg.error.sw_overflow = 1;
+
+    if (can_queue_push(&can_rx_queue, &msg) == 0)
+        rx_overflowed = false;
 }
 
 // ---- Entry point -----------------------------------------------------------
@@ -341,6 +465,7 @@ void core0_main(void)
             service_can_interrupt();
 
         service_can_tx();
+        service_sw_overflow_report();
 
         gpio_put(GPIO_LED_ACTIVITY, 0);
     }

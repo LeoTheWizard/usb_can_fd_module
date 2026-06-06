@@ -25,30 +25,39 @@
 #define LW_CAN_CLOCK_HZ 40000000
 
 /* Vendor control requests (bmRequestType = 0x40, host-to-device, device recipient). */
-#define LW_CAN_REQ_OPEN            0x01 /* no data */
-#define LW_CAN_REQ_CLOSE           0x02 /* no data */
-#define LW_CAN_REQ_SET_BITTIMING   0x03 /* data = struct lw_can_bittiming */
-#define LW_CAN_REQ_SET_MODE        0x04 /* wValue = mcp251xfd_opmode_t */
-#define LW_CAN_REQ_SET_TERMINATION 0x05 /* wValue = 1 (on) / 0 (off) */
+#define LW_CAN_REQ_OPEN              0x01 /* no data */
+#define LW_CAN_REQ_CLOSE            0x02 /* no data */
+#define LW_CAN_REQ_SET_BITTIMING    0x03 /* data = struct lw_can_bittiming (nominal) */
+#define LW_CAN_REQ_SET_MODE         0x04 /* wValue = mcp251xfd_opmode_t */
+#define LW_CAN_REQ_SET_TERMINATION  0x05 /* wValue = 1 (on) / 0 (off) */
+#define LW_CAN_REQ_SET_DATA_BITTIMING 0x06 /* data = struct lw_can_bittiming (data phase) */
 
 /* Start-of-frame marker: first field of every bulk packet (little-endian 0x55,0xAA). */
 #define LW_CAN_SOF 0xAA55
 
 /* Bulk packet type tag. */
-#define LW_CAN_MSG_FRAME 0x00
-#define LW_CAN_MSG_ERROR 0x01
+#define LW_CAN_MSG_FRAME    0x00
+#define LW_CAN_MSG_ERROR    0x01
+#define LW_CAN_MSG_TX_EVENT 0x02 /* transmit confirmation (device -> host) */
 
 /* can_frame_flags_t mirror. */
 #define LW_CAN_FLAG_EFF 0x01 /* extended frame */
 #define LW_CAN_FLAG_FDF 0x02 /* CAN FD */
 #define LW_CAN_FLAG_BRS 0x04 /* bit-rate switch */
 #define LW_CAN_FLAG_ESI 0x08 /* error state indicator */
+#define LW_CAN_FLAG_RTR 0x10 /* remote request (classic only, no data) */
 
-/* Payload for LW_CAN_REQ_SET_BITTIMING (8 bytes). */
+/*
+ * Payload for LW_CAN_REQ_SET_BITTIMING / LW_CAN_REQ_SET_DATA_BITTIMING (6 bytes,
+ * one CAN phase). Register-level segments (time quanta, actual counts). Maps to
+ * struct can_bittiming: brp=brp, tseg1=prop_seg+phase_seg1, tseg2=phase_seg2, sjw=sjw.
+ */
 struct lw_can_bittiming {
-	__le32 nominal_baud;
-	__le32 data_baud;
-};
+	__le16 brp;
+	__le16 tseg1;
+	__u8   tseg2;
+	__u8   sjw;
+} __packed;
 
 /*
  * CAN frame as carried on the wire. Mirrors the firmware's can_frame_t, which is
@@ -90,6 +99,19 @@ struct lw_can_error {
 	__u8   dcrc_err;
 	__u8   txbo_err;
 	__u8   dlc_mismatch;
+	__u8   sw_overflow;	/* device dropped a frame/event; software RX queue full */
+} __packed;
+
+/*
+ * Transmit confirmation (device -> host, type == LW_CAN_MSG_TX_EVENT). cookie echoes
+ * the packet timestamp_us the host set on the outgoing frame (e.g. an echo index);
+ * the packet timestamp_us here is the transmit time.
+ */
+struct lw_can_tx_event {
+	__le32 cookie;
+	__le32 id;
+	__u8   flags;
+	__u8   dlc;
 } __packed;
 
 /*
@@ -103,8 +125,9 @@ struct lw_can_packet {
 	__u8   _reserved;
 	__le32 timestamp_us;
 	union {
-		struct lw_can_frame frame;
-		struct lw_can_error error;
+		struct lw_can_frame    frame;
+		struct lw_can_error    error;
+		struct lw_can_tx_event tx_event;
 	} payload;
 	__le32 crc;
 };

@@ -43,6 +43,8 @@ void usb_can_task(can_queue_t *rx_queue, can_queue_t *tx_queue)
             pkt.payload.frame = msg.frame;
         else if (msg.type == CAN_MSG_ERROR)
             pkt.payload.error = msg.error;
+        else if (msg.type == CAN_MSG_TX_EVENT)
+            pkt.payload.tx_event = msg.tx_event;
 
         usb_can_packet_set_crc(&pkt);
         tud_vendor_write(&pkt, sizeof(pkt));
@@ -83,7 +85,7 @@ void usb_can_task(can_queue_t *rx_queue, can_queue_t *tx_queue)
 
 // ---- TinyUSB control request callback --------------------------------------
 
-// Staging buffer for SET_BITTIMING data phase.
+// Staging buffer for the SET_BITTIMING / SET_DATA_BITTIMING control data stage.
 static usb_can_bittiming_t pending_bittiming;
 
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
@@ -120,8 +122,24 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
         if (stage == CONTROL_STAGE_ACK)
         {
             multicore_fifo_push_blocking(IPC_CMD_SET_BITTIMING);
-            multicore_fifo_push_blocking(pending_bittiming.nominal_baud);
-            multicore_fifo_push_blocking(pending_bittiming.data_baud);
+            multicore_fifo_push_blocking(IPC_BITTIMING_PACK_W0(pending_bittiming.brp,
+                                                              pending_bittiming.tseg1));
+            multicore_fifo_push_blocking(IPC_BITTIMING_PACK_W1(pending_bittiming.tseg2,
+                                                              pending_bittiming.sjw));
+        }
+        break;
+
+    case USB_CAN_REQ_SET_DATA_BITTIMING:
+        if (stage == CONTROL_STAGE_SETUP)
+            return tud_control_xfer(rhport, request, &pending_bittiming,
+                                    sizeof(pending_bittiming));
+        if (stage == CONTROL_STAGE_ACK)
+        {
+            multicore_fifo_push_blocking(IPC_CMD_SET_DATA_BITTIMING);
+            multicore_fifo_push_blocking(IPC_BITTIMING_PACK_W0(pending_bittiming.brp,
+                                                              pending_bittiming.tseg1));
+            multicore_fifo_push_blocking(IPC_BITTIMING_PACK_W1(pending_bittiming.tseg2,
+                                                              pending_bittiming.sjw));
         }
         break;
 

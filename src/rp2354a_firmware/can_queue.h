@@ -21,8 +21,9 @@
  */
 typedef enum can_msg_type
 {
-    CAN_MSG_FRAME = 0, // Normal CAN data frame — frame member is valid.
-    CAN_MSG_ERROR = 1, // Bus error event — error member is valid.
+    CAN_MSG_FRAME = 0,    // Normal CAN data frame — frame member is valid.
+    CAN_MSG_ERROR = 1,    // Bus error event — error member is valid.
+    CAN_MSG_TX_EVENT = 2, // Transmit confirmation — tx_event member is valid.
 } can_msg_type_t;
 
 // usb_can_error_t (from usb_can_protocol.h) is the error payload type used in the union below.
@@ -37,8 +38,9 @@ typedef struct can_message
     size_t  timestamp; // Microsecond timestamp from the MCP251xFD hardware counter.
     uint8_t type;      // Use can_msg_type_t values.
     union {
-        can_frame_t     frame; // Valid when type == CAN_MSG_FRAME.
-        usb_can_error_t error; // Valid when type == CAN_MSG_ERROR.
+        can_frame_t        frame;    // Valid when type == CAN_MSG_FRAME.
+        usb_can_error_t    error;    // Valid when type == CAN_MSG_ERROR.
+        usb_can_tx_event_t tx_event; // Valid when type == CAN_MSG_TX_EVENT.
     };
 } can_message_t;
 
