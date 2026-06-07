@@ -142,18 +142,6 @@ static int lw_can_set_data_bittiming(struct net_device *netdev)
 				     &priv->can.fd.data_bittiming);
 }
 
-static int lw_can_set_mode(struct net_device *netdev, enum can_mode mode)
-{
-	switch (mode) {
-	case CAN_MODE_START:
-		/* TODO (milestone 4): tell the device to leave bus-off explicitly. */
-		netif_wake_queue(netdev);
-		return 0;
-	default:
-		return -EOPNOTSUPP;
-	}
-}
-
 /* ---- TX context pool ----------------------------------------------------- */
 
 static void lw_can_init_tx_contexts(struct lw_can *priv)
@@ -621,10 +609,58 @@ static int lw_can_close(struct net_device *netdev)
 	return 0;
 }
 
+/*
+ * Restart after bus-off (manual `ip link ... restart`, or automatic via restart-ms).
+ * The device stays bus-off until told, so command the recovery; also clear echo slots
+ * stuck from the bus-off, whose TX_EVENTs the firmware dropped.
+ */
+static int lw_can_set_mode(struct net_device *netdev, enum can_mode mode)
+{
+	struct lw_can *priv = netdev_priv(netdev);
+	int err;
+
+	switch (mode) {
+	case CAN_MODE_START:
+		usb_kill_anchored_urbs(&priv->tx_submitted);
+		lw_can_flush_tx_contexts(priv);
+
+		err = lw_can_ctrl(priv, LW_CAN_REQ_RESTART, 0, NULL, 0);
+		if (err) {
+			netdev_err(netdev, "restart request failed: %d\n", err);
+			return err;
+		}
+
+		priv->can.state = CAN_STATE_ERROR_ACTIVE;
+		netif_wake_queue(netdev);
+		return 0;
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+/*
+ * Recovery if the TX queue stalls: a frame was delivered to the device but its
+ * TX_EVENT never came back (firmware drop / TEF overflow), leaving its echo slot
+ * stuck. Cancel any in-flight OUT URBs, release the stuck echo skbs, and re-open
+ * the queue. Runs in process context from the netdev watchdog.
+ */
+static void lw_can_tx_timeout(struct net_device *netdev, unsigned int txqueue)
+{
+	struct lw_can *priv = netdev_priv(netdev);
+
+	netdev_warn(netdev, "TX timeout, flushing pending transmits\n");
+	netdev->stats.tx_errors++;
+
+	usb_kill_anchored_urbs(&priv->tx_submitted);
+	lw_can_flush_tx_contexts(priv);
+	netif_wake_queue(netdev);
+}
+
 static const struct net_device_ops lw_can_netdev_ops = {
 	.ndo_open       = lw_can_open,
 	.ndo_stop       = lw_can_close,
 	.ndo_start_xmit = lw_can_start_xmit,
+	.ndo_tx_timeout = lw_can_tx_timeout,
 	/* MTU is handled by the CAN core; for FD, call can_set_default_mtu()
 	 * after enabling CAN_CTRLMODE_FD (milestone 5). */
 };
@@ -670,6 +706,7 @@ static int lw_can_probe(struct usb_interface *intf,
 	/* TODO: also LISTENONLY | LOOPBACK | ONE_SHOT once the firmware maps them. */
 
 	netdev->netdev_ops = &lw_can_netdev_ops;
+	netdev->watchdog_timeo = HZ;        /* recover a TX queue stalled on a lost TX_EVENT */
 	netdev->flags |= IFF_ECHO;          /* enable local echo for TX path */
 
 	SET_NETDEV_DEV(netdev, &intf->dev);

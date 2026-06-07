@@ -18,6 +18,7 @@
  *   IPC_CMD_SET_BITTIMING     — [cmd] [word0] [word1]  (nominal phase)
  *   IPC_CMD_SET_DATA_BITTIMING — [cmd] [word0] [word1] (data phase)
  *   IPC_CMD_SET_TERMINATION   — [cmd] [uint32_t enable (1 = on, 0 = off)]
+ *   IPC_CMD_RESTART           — [cmd]  (recover from bus-off, resume NORMAL)
  *
  * @author Leo Walker
  * @copyright (c) Leo Walker 2025 @ MIT License @cite MIT License
@@ -32,6 +33,7 @@
 #define IPC_CMD_SET_BITTIMING     0x04U /**< Payload: two packed bit-timing words (nominal). */
 #define IPC_CMD_SET_TERMINATION   0x05U /**< Payload: one word — 1 = enable, 0 = disable. */
 #define IPC_CMD_SET_DATA_BITTIMING 0x06U /**< Payload: two packed bit-timing words (data phase). */
+#define IPC_CMD_RESTART           0x07U /**< No payload: recover from bus-off and resume NORMAL. */
 
 /* Pack/unpack a bit-timing phase to/from two inter-core FIFO words. */
 #define IPC_BITTIMING_PACK_W0(brp, tseg1)  ((uint32_t)(brp) | ((uint32_t)(tseg1) << 16))

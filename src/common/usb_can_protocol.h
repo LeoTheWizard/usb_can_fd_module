@@ -49,6 +49,7 @@
 #define USB_CAN_REQ_SET_MODE         0x04 /**< Set operating mode. wValue = mcp251xfd_opmode_t. */
 #define USB_CAN_REQ_SET_TERMINATION  0x05 /**< Enable/disable 120Ω termination. wValue = 1 (on) or 0 (off). */
 #define USB_CAN_REQ_SET_DATA_BITTIMING 0x06 /**< Set data-phase (CAN FD) bit timing. Data = usb_can_bittiming_t. */
+#define USB_CAN_REQ_RESTART          0x07 /**< Recover from bus-off and resume NORMAL mode. No data payload. */
 
 /**
  * @brief Payload for USB_CAN_REQ_SET_BITTIMING / USB_CAN_REQ_SET_DATA_BITTIMING

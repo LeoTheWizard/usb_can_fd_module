@@ -161,6 +161,14 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
         }
         break;
 
+    case USB_CAN_REQ_RESTART:
+        if (stage == CONTROL_STAGE_SETUP)
+        {
+            multicore_fifo_push_blocking(IPC_CMD_RESTART);
+            return tud_control_status(rhport, request);
+        }
+        break;
+
     default:
         return false;
     }

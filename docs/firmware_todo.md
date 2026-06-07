@@ -65,11 +65,16 @@ left to finish or decide before it's a dependable CAN module, grouped by theme.
       offer hardware filter offload later.
 
 ## 8. Bus-off & error reporting
-- [ ] `recover_bus_off()` is called inline on bus-off. SocketCAN has restart-ms / manual
-      restart semantics — decide the policy and whether the host controls it.
-- [ ] The custom `usb_can_error_t` must be translatable to SocketCAN error frames
-      (`CAN_ERR_*`). Make sure all fields the kernel needs (state transitions, counters)
-      are present and clearly defined.
+- [x] DONE: bus-off recovery is now host-controlled. core0 reports bus-off and stops
+      auto-recovering (no longer blocks the loop in recover_bus_off); a new IPC_CMD_RESTART
+      / USB_CAN_REQ_RESTART performs the recovery. The kernel driver's
+      do_set_mode(CAN_MODE_START) issues it (manual `ip link ... restart` or restart-ms),
+      so SocketCAN restart semantics are respected.
+- [x] DONE: usb_can_error_t is translated to SocketCAN error frames in the driver
+      (can_change_state for warning/passive, can_bus_off, CAN_ERR_CRTL_RX_OVERFLOW for
+      overflows, CAN_ERR_CNT with TEC/REC).
+- [ ] Hardware-verify the bus-off → report → restart cycle end to end (timing, whether
+      the MCP251xFD auto-leaves bus-off independently, restart-ms behaviour).
 
 ## 9. RX flush on open (known limitation)
 - [ ] `USB_CAN_REQ_OPEN` flushes only the OUT (host→device) FIFO. Stale RX frames already

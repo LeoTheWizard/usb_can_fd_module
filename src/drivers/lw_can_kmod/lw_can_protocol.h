@@ -31,6 +31,7 @@
 #define LW_CAN_REQ_SET_MODE         0x04 /* wValue = mcp251xfd_opmode_t */
 #define LW_CAN_REQ_SET_TERMINATION  0x05 /* wValue = 1 (on) / 0 (off) */
 #define LW_CAN_REQ_SET_DATA_BITTIMING 0x06 /* data = struct lw_can_bittiming (data phase) */
+#define LW_CAN_REQ_RESTART          0x07 /* recover from bus-off, resume NORMAL; no data */
 
 /* Start-of-frame marker: first field of every bulk packet (little-endian 0x55,0xAA). */
 #define LW_CAN_SOF 0xAA55

@@ -299,10 +299,10 @@ static void service_can_error(uint32_t int_flags)
 
     if (state.bus_off)
     {
-        // Pending TX frames are discarded by the recovery; drop their cookies so they
-        // don't mis-pair with later transmit events. The host flushes its own echoes.
+        // Drop pending TX cookies so they don't mis-pair with later transmit events.
+        // Recovery is host-controlled (IPC_CMD_RESTART) to respect SocketCAN restart
+        // semantics and to avoid blocking this loop in the bus-off recovery wait.
         tx_cookie_reset();
-        mcp251xfd_recover_bus_off(can_controller, 200000);
     }
 }
 
@@ -425,6 +425,15 @@ static void service_ipc(void)
         gpio_put(GPIO_CAN_120R_ENABLE, enable ? 1 : 0);
         break;
     }
+
+    case IPC_CMD_RESTART:
+        // Host-requested recovery from bus-off (blocks briefly until the controller
+        // completes the CAN recovery sequence; restart is rare and intentional).
+        mcp251xfd_recover_bus_off(can_controller, 200000);
+        tx_cookie_reset();
+        gpio_put(GPIO_LED_RED, 0);
+        gpio_put(GPIO_LED_GREEN, 1);
+        break;
 
     default:
         break;
