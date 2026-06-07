@@ -33,7 +33,8 @@ The firmware bridges the MCP251xFD to the host over a small CRC-framed USB vendo
 (core 0 drives CAN over SPI, core 1 drives USB; lock-free queues connect them). The Linux
 kernel module presents that as a standard SocketCAN network device. The wire protocol is
 defined once in [`src/common/usb_can_protocol.h`](src/common/usb_can_protocol.h) and shared
-by both sides.
+by both sides — see the [**Host Protocol Guide**](docs/usb_protocol.md) to implement your
+own host driver or library.
 
 ---
 
