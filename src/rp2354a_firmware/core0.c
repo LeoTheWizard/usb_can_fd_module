@@ -77,6 +77,10 @@ static bool rx_overflowed = false;
 
 static MCP251XFD *can_controller = NULL;
 
+// Live status snapshot, published here by core 0 and read by core 1 for the USB
+// GET_STATUS query. Declared in ipc.h.
+device_status_t g_device_status = {0};
+
 // ---- SPI platform callbacks ------------------------------------------------
 
 static void spi_transfer_cb(void *ctx, const uint8_t *tx, uint8_t *rx, size_t len)
@@ -119,6 +123,61 @@ static void initialise_leds(void)
     gpio_set_dir(GPIO_LED_GREEN, GPIO_OUT);
     gpio_set_dir(GPIO_LED_YELLOW, GPIO_OUT);
     gpio_set_dir(GPIO_LED_RED, GPIO_OUT);
+}
+
+// ---- LED status ------------------------------------------------------------
+//
+// Three status LEDs show CAN bus health — exactly one is lit while the bus is open,
+// all off while it is closed:
+//   green  — bus open and error-active (healthy)
+//   yellow — error-warning or error-passive (degraded, still communicating)
+//   red    — bus-off (cannot communicate)
+// A fourth LED blinks on TX/RX activity.
+
+// Set the CAN bus state: drives the three status LEDs and publishes it for GET_STATUS.
+// Error-warning and error-passive both show yellow; config/offline shows nothing.
+static void set_bus_state(can_bus_state_t s)
+{
+    g_device_status.bus_state = (uint8_t)s;
+    gpio_put(GPIO_LED_GREEN, s == CAN_BUS_STATE_ACTIVE);
+    gpio_put(GPIO_LED_YELLOW, s == CAN_BUS_STATE_WARNING || s == CAN_BUS_STATE_PASSIVE);
+    gpio_put(GPIO_LED_RED, s == CAN_BUS_STATE_BUS_OFF);
+}
+
+// Activity LED: pulse-stretched so a single frame is a visible blink and continuous
+// traffic shows as a steady blink. Driven from the core 0 loop only (no locking).
+#define ACTIVITY_ON_US 20000u  // minimum on time per blink
+#define ACTIVITY_OFF_US 20000u // minimum off time between blinks
+
+static bool activity_pending = false; // traffic seen since the last blink started
+static bool activity_led_on = false;
+static uint32_t activity_changed_us = 0;
+
+static void note_activity(void)
+{
+    activity_pending = true;
+}
+
+static void service_activity_led(void)
+{
+    uint32_t now = time_us_32();
+
+    if (activity_led_on)
+    {
+        if (now - activity_changed_us >= ACTIVITY_ON_US)
+        {
+            gpio_put(GPIO_LED_ACTIVITY, 0);
+            activity_led_on = false;
+            activity_changed_us = now;
+        }
+    }
+    else if (activity_pending && now - activity_changed_us >= ACTIVITY_OFF_US)
+    {
+        activity_pending = false;
+        gpio_put(GPIO_LED_ACTIVITY, 1);
+        activity_led_on = true;
+        activity_changed_us = now;
+    }
 }
 
 static void initialise_can_int_gpio(void)
@@ -182,9 +241,13 @@ static void initialise_can_controller(void)
 
     // Enable on-board 120Ω termination resistor.
     gpio_put(GPIO_CAN_120R_ENABLE, 1);
+    g_device_status.termination = 1;
 
-    mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_NORMAL, 100000);
-    gpio_put(GPIO_LED_GREEN, 1);
+    // Stay in configuration mode (off the bus) until the host opens the interface;
+    // IPC_CMD_OPEN transitions to NORMAL. mcp251xfd_initialise() already left the
+    // controller in config mode, so the device does not drive or ACK the bus yet.
+    mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_CONFIG, 100000);
+    set_bus_state(CAN_BUS_STATE_CONFIG);
 }
 
 // ---- Helpers ---------------------------------------------------------------
@@ -241,7 +304,7 @@ static void service_can_rx(void)
             break;
 
         rx_queue_push(&msg);
-        gpio_put(GPIO_LED_ACTIVITY, 1);
+        note_activity();
         pending--;
     }
 }
@@ -294,8 +357,17 @@ static void service_can_error(uint32_t int_flags)
     }
 
     rx_queue_push(&msg);
-    gpio_put(GPIO_LED_RED, state.bus_off || state.tx_passive || state.rx_passive);
-    gpio_put(GPIO_LED_YELLOW, state.error_warn);
+
+    g_device_status.tec = state.tec;
+    g_device_status.rec = state.rec;
+    if (state.bus_off)
+        set_bus_state(CAN_BUS_STATE_BUS_OFF);
+    else if (state.tx_passive || state.rx_passive)
+        set_bus_state(CAN_BUS_STATE_PASSIVE);
+    else if (state.error_warn)
+        set_bus_state(CAN_BUS_STATE_WARNING);
+    else
+        set_bus_state(CAN_BUS_STATE_ACTIVE);
 
     if (state.bus_off)
     {
@@ -355,7 +427,7 @@ static void service_can_tx(void)
         // Record the host's echo cookie so the matching TEF event can return it.
         tx_cookie_push((uint32_t)msg.timestamp);
         can_queue_pop(&can_tx_queue, &msg);
-        gpio_put(GPIO_LED_ACTIVITY, 1);
+        note_activity();
     }
 }
 
@@ -372,12 +444,12 @@ static void service_ipc(void)
     {
     case IPC_CMD_OPEN:
         mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_NORMAL, 100000);
-        gpio_put(GPIO_LED_GREEN, 1);
+        set_bus_state(CAN_BUS_STATE_ACTIVE);
         break;
 
     case IPC_CMD_CLOSE:
         mcp251xfd_change_opmode(can_controller, MCP251XFD_OPMODE_SLEEP, 100000);
-        gpio_put(GPIO_LED_GREEN, 0);
+        set_bus_state(CAN_BUS_STATE_CONFIG);
         break;
 
     case IPC_CMD_SET_MODE:
@@ -423,6 +495,7 @@ static void service_ipc(void)
     {
         uint32_t enable = multicore_fifo_pop_blocking();
         gpio_put(GPIO_CAN_120R_ENABLE, enable ? 1 : 0);
+        g_device_status.termination = enable ? 1 : 0;
         break;
     }
 
@@ -431,8 +504,9 @@ static void service_ipc(void)
         // completes the CAN recovery sequence; restart is rare and intentional).
         mcp251xfd_recover_bus_off(can_controller, 200000);
         tx_cookie_reset();
-        gpio_put(GPIO_LED_RED, 0);
-        gpio_put(GPIO_LED_GREEN, 1);
+        g_device_status.tec = 0;
+        g_device_status.rec = 0;
+        set_bus_state(CAN_BUS_STATE_ACTIVE);
         break;
 
     default:
@@ -475,7 +549,6 @@ void core0_main(void)
 
         service_can_tx();
         service_sw_overflow_report();
-
-        gpio_put(GPIO_LED_ACTIVITY, 0);
+        service_activity_led();
     }
 }

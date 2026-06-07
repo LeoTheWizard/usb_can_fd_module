@@ -50,6 +50,29 @@
 #define USB_CAN_REQ_SET_TERMINATION  0x05 /**< Enable/disable 120Ω termination. wValue = 1 (on) or 0 (off). */
 #define USB_CAN_REQ_SET_DATA_BITTIMING 0x06 /**< Set data-phase (CAN FD) bit timing. Data = usb_can_bittiming_t. */
 #define USB_CAN_REQ_RESTART          0x07 /**< Recover from bus-off and resume NORMAL mode. No data payload. */
+#define USB_CAN_REQ_GET_STATUS       0x08 /**< Device-to-host: read usb_can_status_t. */
+
+/** Bus state values in usb_can_status_t.bus_state (match the device's can_bus_state_t). */
+#define USB_CAN_STATE_CONFIG  0 /**< Off the bus (not yet opened). */
+#define USB_CAN_STATE_ACTIVE  1 /**< Error-active (healthy). */
+#define USB_CAN_STATE_WARNING 2 /**< Error-warning. */
+#define USB_CAN_STATE_PASSIVE 3 /**< Error-passive. */
+#define USB_CAN_STATE_BUS_OFF 4 /**< Bus-off. */
+
+/**
+ * @brief Reply payload for USB_CAN_REQ_GET_STATUS (device-to-host, 8 bytes).
+ */
+typedef struct __attribute__((packed)) usb_can_status
+{
+    uint8_t fw_major;    /**< Firmware version major. */
+    uint8_t fw_minor;    /**< Firmware version minor. */
+    uint8_t fw_patch;    /**< Firmware version patch. */
+    uint8_t bus_state;   /**< USB_CAN_STATE_* — current CAN bus state. */
+    uint8_t tec;         /**< Transmit error counter (last known). */
+    uint8_t rec;         /**< Receive error counter (last known). */
+    uint8_t termination; /**< 1 if the on-board 120Ω resistor is enabled. */
+    uint8_t _reserved;
+} usb_can_status_t;
 
 /**
  * @brief Payload for USB_CAN_REQ_SET_BITTIMING / USB_CAN_REQ_SET_DATA_BITTIMING

@@ -10,6 +10,7 @@
 
 #include "usb_can.h"
 #include "ipc.h"
+#include "main.h"
 
 #include <string.h>
 #include <tusb.h>
@@ -166,6 +167,23 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
         {
             multicore_fifo_push_blocking(IPC_CMD_RESTART);
             return tud_control_status(rhport, request);
+        }
+        break;
+
+    case USB_CAN_REQ_GET_STATUS:
+        // Device-to-host: return a snapshot of g_device_status (published by core 0).
+        if (stage == CONTROL_STAGE_SETUP)
+        {
+            static usb_can_status_t status; // must persist through the data stage
+            status.fw_major    = FIRMWARE_VERSION_MAJOR;
+            status.fw_minor    = FIRMWARE_VERSION_MINOR;
+            status.fw_patch    = FIRMWARE_VERSION_PATCH;
+            status.bus_state   = g_device_status.bus_state;
+            status.tec         = g_device_status.tec;
+            status.rec         = g_device_status.rec;
+            status.termination = g_device_status.termination;
+            status._reserved   = 0;
+            return tud_control_xfer(rhport, request, &status, sizeof(status));
         }
         break;
 

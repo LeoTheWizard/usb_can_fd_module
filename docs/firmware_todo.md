@@ -25,10 +25,13 @@ left to finish or decide before it's a dependable CAN module, grouped by theme.
       usb_can_error_t.sw_overflow set once the queue drains.
 
 ## 3. Host-visible status (protocol gap)
-- [ ] No way for the host to *query* state: firmware version, current bitrate/mode,
-      bus state, error counters on demand. Today errors are only pushed asynchronously.
-      Add a control request with a data-IN stage (e.g. `GET_STATUS`, `GET_VERSION`).
-- [ ] A version/capability handshake would let the host driver detect protocol mismatches.
+- [x] DONE: USB_CAN_REQ_GET_STATUS (control-IN) returns usb_can_status_t: firmware
+      version, bus state, TEC/REC, and termination on/off. core0 publishes a live
+      g_device_status snapshot (see ipc.h); core1 serves it. The Linux driver queries it
+      at probe and exposes the firmware version via `ethtool -i canX`. Serial number is
+      available separately via the USB serial-number string descriptor (chip UID).
+- [ ] Not reported: current bitrate/mode (the host/kernel already knows these) and a
+      capability/feature bitmap for protocol-version negotiation — add if needed.
 
 ## 4. TX path: echo, confirmation, flow control (needed for SocketCAN)
 - [x] DONE: TX confirmation via TEF. core0 enables the TEF, drains it on the TEF

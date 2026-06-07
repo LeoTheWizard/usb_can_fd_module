@@ -18,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/usb.h>
 #include <linux/netdevice.h>
+#include <linux/ethtool.h>
 #include <linux/crc32.h>
 
 #include <linux/can.h>
@@ -58,6 +59,8 @@ struct lw_can {
 	struct lw_can_tx_context tx_contexts[LW_CAN_MAX_TX_URBS];
 	spinlock_t tx_ctx_lock;
 	atomic_t tx_active;     /* number of in-flight TX frames */
+
+	char fw_version[16];    /* from GET_STATUS at probe; for ethtool -i */
 };
 
 /*
@@ -106,6 +109,13 @@ static int lw_can_ctrl(struct lw_can *priv, __u8 request, __u16 value,
 	return usb_control_msg_send(priv->udev, 0, request,
 				    USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
 				    value, 0, data, size, 1000, GFP_KERNEL);
+}
+
+static int lw_can_get_status(struct lw_can *priv, struct lw_can_status *status)
+{
+	return usb_control_msg_recv(priv->udev, 0, LW_CAN_REQ_GET_STATUS,
+				    USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+				    0, 0, status, sizeof(*status), 1000, GFP_KERNEL);
 }
 
 /*
@@ -665,11 +675,28 @@ static const struct net_device_ops lw_can_netdev_ops = {
 	 * after enabling CAN_CTRLMODE_FD (milestone 5). */
 };
 
+/* ---- ethtool ------------------------------------------------------------- */
+
+static void lw_can_get_drvinfo(struct net_device *netdev,
+			       struct ethtool_drvinfo *info)
+{
+	struct lw_can *priv = netdev_priv(netdev);
+
+	strscpy(info->driver, KBUILD_MODNAME, sizeof(info->driver));
+	strscpy(info->fw_version, priv->fw_version, sizeof(info->fw_version));
+	usb_make_path(priv->udev, info->bus_info, sizeof(info->bus_info));
+}
+
+static const struct ethtool_ops lw_can_ethtool_ops = {
+	.get_drvinfo = lw_can_get_drvinfo,
+};
+
 /* ---- USB probe / disconnect ---------------------------------------------- */
 
 static int lw_can_probe(struct usb_interface *intf,
 			const struct usb_device_id *id)
 {
+	struct lw_can_status status;
 	struct usb_endpoint_descriptor *ep_in, *ep_out;
 	struct net_device *netdev;
 	struct lw_can *priv;
@@ -706,11 +733,23 @@ static int lw_can_probe(struct usb_interface *intf,
 	/* TODO: also LISTENONLY | LOOPBACK | ONE_SHOT once the firmware maps them. */
 
 	netdev->netdev_ops = &lw_can_netdev_ops;
+	netdev->ethtool_ops = &lw_can_ethtool_ops;
 	netdev->watchdog_timeo = HZ;        /* recover a TX queue stalled on a lost TX_EVENT */
 	netdev->flags |= IFF_ECHO;          /* enable local echo for TX path */
 
 	SET_NETDEV_DEV(netdev, &intf->dev);
 	usb_set_intfdata(intf, priv);
+
+	/* Query device status for firmware version / termination state. */
+	strscpy(priv->fw_version, "unknown", sizeof(priv->fw_version));
+	if (lw_can_get_status(priv, &status) == 0) {
+		scnprintf(priv->fw_version, sizeof(priv->fw_version), "%u.%u.%u",
+			  status.fw_major, status.fw_minor, status.fw_patch);
+		dev_info(&intf->dev, "firmware v%s, 120R termination %s\n",
+			 priv->fw_version, status.termination ? "on" : "off");
+	} else {
+		dev_warn(&intf->dev, "GET_STATUS failed; firmware version unknown\n");
+	}
 
 	err = register_candev(netdev);
 	if (err) {

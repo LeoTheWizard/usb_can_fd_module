@@ -32,6 +32,19 @@
 #define LW_CAN_REQ_SET_TERMINATION  0x05 /* wValue = 1 (on) / 0 (off) */
 #define LW_CAN_REQ_SET_DATA_BITTIMING 0x06 /* data = struct lw_can_bittiming (data phase) */
 #define LW_CAN_REQ_RESTART          0x07 /* recover from bus-off, resume NORMAL; no data */
+#define LW_CAN_REQ_GET_STATUS       0x08 /* device-to-host: read struct lw_can_status */
+
+/* Reply for LW_CAN_REQ_GET_STATUS (device-to-host, 8 bytes). */
+struct lw_can_status {
+	__u8 fw_major;
+	__u8 fw_minor;
+	__u8 fw_patch;
+	__u8 bus_state;   /* 0=config 1=active 2=warning 3=passive 4=bus-off */
+	__u8 tec;
+	__u8 rec;
+	__u8 termination; /* 1 if on-board 120R enabled */
+	__u8 _reserved;
+} __packed;
 
 /* Start-of-frame marker: first field of every bulk packet (little-endian 0x55,0xAA). */
 #define LW_CAN_SOF 0xAA55
